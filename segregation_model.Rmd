@@ -1,0 +1,301 @@
+---
+title: "Initial Segregation Model"
+author: "Danielle Stone, MS, MPH"
+description: >
+  Based on code written by Jon Zelner and Stephanie Choi
+output:
+  html_document:
+    toc: FALSE
+---
+
+*Initial look at the segregation code written by Jon Zelner and Stephanie Choi.* \
+
+# Introduction
+
+- ### Slow Diffusion of Healthcare Innovations
+There exists an undeniable, fundemental health disparity between minority and majority groups. This is thought to be, at least partly, due to the vast difference in access to health innovations which slowly percolate through the population, reaching minority and low SES populations last. This time dependent healthcare inequity is incredibly concerning as the COVID-19 pandemic has demonstrated an increased transmission among lower income populations, compounding the slow diffusion of prevention and treatment to these groups. 
+\
+
+- ### Essential Workers
+During the pandemic certain workers have been considered essential and therefore, lost much of the benefit derived from the lockdown orders throughout the pandemic. This was esspecially true during the beginning of the pandemic where masks and other PPE items were scarce to unattainable. Low SES workers were more likely to be deemed necessary and be required to still show up to work. Evidence is suggesting this as a driving force, especially early in the pandemic, for the differential morbidity and mortality we have observed between majority and minority groups.
+\
+
+- ### Population Dynamics (Concentration/Isolation)
+Publications have demonstrated residential segregation has a strong relationship with infectious disease risk. Specifically, Avecedo-Garcia et al (2020) discussed several methods of measuring the intensity of residential segregation in a population. Using these two measures (concentration & isolation) we can quantitatively investigate the relationship between the intensity of residential segregation between minority and majority populations - commonly classified by SES, race, and/or ethnicity - and the risk of various infections. Since infection occurs via contacts within and across populations measuring these interactions is key to identify how residential segregation impacts infection transmission. The model discussed today is focused on these population dynamics in order for future work to expand and include the aformentioned health inequities.
+
+\
+
+# Model Overview
+
+### Parameters of Interest
+
+- **p1**: *Proportion of minority group in the total population* 
+- **p2**: *Proportion of majority group in the total population*
+- **beta**: *Infections per day (Cases/Day)*
+- **gamma**: *Duration of Infectiousness (Days)*
+- **tau**: *Minority Group Degree of Isolation*
+- **rho**: *Minority Group Degree of Concentration* 
+
+### Definitions
+
+  - **Concentration**
+    - Concentration is defined as the density of contacts of within groups. High concentration indicates individuals in a group have more *contacts per time unit* within group rather than across groups. Furthermore, high concentration indicates contacts are also more **intense** among the same group.
+
+
+  - **Isolation**
+    - Refers to the *proportion* of within to across group contacts of a specific group. High isolation indicates residential segregation acts to make within group contact more likely for minority and majority groups than would be expected by chance alone.
+
+
+### Model
+Built as a modified SIR model where there are S, I, and R compartments for both majority and minority populations. Interaction between groups is dictated by intergroup and intragroup parameters p1, p2, tau, and rho. Tau and rho refer to isolation and concentration, respectively. This report includes exploration of the model and initial parameter sweeps to investigate the parameter space. 
+
+\
+
+# Running through the Model
+
+### SIR Model
+```{r setup, , eval=FALSE}
+require(deSolve)
+
+
+two_group_sir_model <- function(t, x, params) {
+  ## Minority Group
+  S1 <- x[1]
+  I1 <- x[2]
+  R1 <- x[3]
+  p1 <- sum(x[1:3])
+  ## Majority Group
+  S2 <- x[4]
+  I2 <- x[5]
+  R2 <- x[6]
+  p2 <- 1 - p1
+
+  ## now extract the parameters
+  beta <- params["beta"]
+  gamma <- params["gamma"]
+  tau <- params["tau"]
+  rho <- params["rho"]
+
+  ## Calculate proportion of within-between group contact
+  ## for each group
+  ## Minority Group
+  g1_within <- tau / p1
+  g1_between <- (1 - tau) / p2
+  ## Majority Group
+  g2_within <- (1 - (p1 * g1_between)) / p2
+  g2_between <- (p1 * g1_between) / p1
+
+  lambda_1 <- rho * beta * S1 * (g1_within * I1 + g1_between * I2)
+  lambda_2 <- beta * S2 * (g2_within * I2 + g2_between * I1)
+
+  ## now code the model equations
+  ## Minority Group
+  dS1dt <- -lambda_1
+  dI1dt <- lambda_1 - gamma * I1
+  dR1dt <- gamma * I1
+  ## Majority Group
+  dS2dt <- -lambda_2
+  dI2dt <- lambda_2 - gamma * I2
+  dR2dt <- gamma * I2
+
+  ## combine results into a single vector
+  dxdt <- c(dS1dt, dI1dt, dR1dt, dS2dt, dI2dt, dR2dt)
+  ## return result as a list!
+  list(dxdt)
+}
+```
+
+### Parameters
+```{r, eval=FALSE}
+##### Define Parameters #################################
+modelPars <- eventReactive(list(input$beta, input$gamma, input$p1, input$tau, input$rho),
+    {
+        params <- c(
+            beta = input$beta,
+            gamma = 1 / input$gamma,
+            rho = input$rho,
+            tau = input$tau,
+            p1 = input$p1
+        )
+
+        return(params)
+    },
+    ignoreNULL = FALSE
+)
+```
+
+### Run Model
+```{r, eval=FALSE}
+##### Running the Model #################################
+modelRun <- reactive({
+    params <- modelPars()
+    times <- seq(from = 0, to = 365, by = 1) # returns a sequence
+    p1 <- params[["p1"]]
+    p2 <- 1 - p1
+    xstart <- c(S1 = 0.999 * p1, I1 = 0.001 * p1, R1 = 0.0, S2 = 0.999 * p2, I2 = 0.001 * p2, R2 = 0.000)
+
+    out <- as.data.frame(
+        ode(
+            func = two.group.sir.model,
+            y = xstart,
+            times = times,
+            parms = params
+        )
+    )
+
+    return(out)
+})
+```
+
+### Contact Patterns (Minority)
+```{r eval=FALSE}
+##### Minority Contact Patterns #################################
+# to make contactA update on input updates, it listens to list(input$p1a, input$taua)
+contactA <- eventReactive(list(input$p1a, input$taua),
+    {
+        require(packcircles)
+        require(ggplot2)
+        require(plotly)
+
+        num_contacts <- 100
+        intensity <- 1 # input$rhoa
+        p1 <- input$p1a
+        p2 <- 1 - p1
+        a_in_contact_p <- input$taua
+        a_out_contact_p <- 1 - a_in_contact_p
+        b_in_contact_p <- (p2 - (p1 * a_out_contact_p)) / p2
+        b_out_contact_p <- 1 - b_in_contact_p
+
+
+        ## Make a dataframe with circles for the in-group
+        num_in <- round(num_contacts * a_in_contact_p)
+        num_out <- num_contacts - num_in
+
+        print(num_contacts)
+        print(input$taua)
+        print(intensity)
+        print(num_in)
+        print(num_out)
+
+        df <- data.frame(
+            group = c(rep(2, num_in), rep(1, num_out)),
+            ingroup_ratio = c(rep(intensity, num_in), rep(1, num_out))
+        )
+        print(df$ingroup_ratio)
+        df$intensity <- rbeta(nrow(df), 20, 20) * df$ingroup_ratio
+
+        limits <- c(-5, 5)
+        res <- circleRepelLayout(df$intensity, xlim = limits, ylim = limits)
+
+        dat.gg <- circleLayoutVertices(res$layout, sizetype = "radius")
+
+        df$id <- 1:nrow(df)
+
+        dat.gg <- dat.gg %>%
+            inner_join(select(df, id, intensity, group))
+        dat.gg$group <- as.factor(dat.gg$group)
+
+
+        t <- theme_bw() +
+            theme(
+                panel.grid = element_blank(),
+                axis.text = element_blank(),
+                axis.ticks = element_blank(),
+                axis.title = element_blank()
+            )
+
+        theme_set(t)
+
+        g <- ggplot(data = dat.gg, aes(x, y, group = id)) +
+            geom_polygon(aes(fill = group, colour = group), alpha = 0.3) +
+            coord_equal(xlim = limits, ylim = limits) +
+            scale_fill_manual(
+                breaks = c("1", "2"),
+                values = c("red", "blue"),
+                labels = c("majority", "minority")
+            ) +
+            theme(legend.position = "left")
+
+        p <- ggplotly(g)
+
+        return(p)
+    },
+    ignoreNULL = FALSE
+)
+```
+
+### Contact Patterns (Majority)
+```{r eval = FALSE}
+##### Majority Contact Rates #################################
+# to make contactB update on input updates, it listens to list(input$p1a, input$taua)
+contactB <- eventReactive(list(input$p1a, input$taua),
+    {
+        require(packcircles)
+        require(ggplot2)
+        require(plotly)
+
+        num_contacts <- 100
+        intensity <- 1 # input$rhoa
+        p1 <- input$p1a
+        p2 <- 1 - p1
+        a_in_contact_p <- input$taua
+        a_out_contact_p <- 1 - a_in_contact_p
+        b_in_contact_p <- (p2 - (p1 * a_out_contact_p)) / p2
+        b_out_contact_p <- 1 - b_in_contact_p
+
+
+        ## Dataframe with circles for the other group
+        num_in <- round(num_contacts * b_in_contact_p)
+        num_out <- num_contacts - num_in
+        df_b <- data.frame(group = c(rep(1, num_in), rep(2, num_out)))
+        df_b$intensity <- rbeta(nrow(df_b), 20, 20)
+
+
+        limits <- c(-5, 5)
+        res <- circleRepelLayout(df_b$intensity, xlim = limits, ylim = limits)
+
+        dat.gg <- circleLayoutVertices(res$layout, sizetype = "radius")
+
+        df_b$id <- 1:nrow(df_b)
+
+        dat.gg <- dat.gg %>%
+            inner_join(select(df_b, id, intensity, group))
+        dat.gg$group <- as.factor(dat.gg$group)
+
+
+        t <- theme_bw() +
+            theme(
+                panel.grid = element_blank(),
+                axis.text = element_blank(),
+                axis.ticks = element_blank(),
+                axis.title = element_blank()
+            )
+
+        theme_set(t)
+
+        g <- ggplot(data = dat.gg, aes(x, y, group = id)) +
+            geom_polygon(aes(fill = group, colour = group), alpha = 0.3) +
+            coord_equal(xlim = limits, ylim = limits) +
+            scale_fill_manual(
+                breaks = c("1", "2"),
+                values = c("red", "blue")
+            ) +
+            theme(legend.position = "left")
+
+        p <- ggplotly(g)
+
+        return(p)
+    },
+    ignoreNULL = FALSE
+)
+```
+
+\
+
+# Sweeping the Model
+look at how clean it is now!
+
+\
+
+# ::: {#refs}
+:::
